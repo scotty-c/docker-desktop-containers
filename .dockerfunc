@@ -1,0 +1,257 @@
+#!/bin/bash
+# Bash wrappers for docker run commands
+# 
+# Helper Functions
+#
+# docker-machine stuff
+if [ $(which docker-machine) ]; then
+  export C_DOCKER_MACHINE="default"
+
+  dminit() {
+    docker-machine start ${C_DOCKER_MACHINE}
+    dmshell
+  }
+
+  dmshell() {
+    eval $(docker-machine env ${C_DOCKER_MACHINE})
+  }
+
+  docker_if_not_running() {
+    if [ $(docker-machine status ${C_DOCKER_MACHINE}) != 'Running' ]; then
+      dminit
+    fi
+  }
+
+  dmhosts() {
+    DMHOSTNAME="dockerhost"
+
+    sudo -v
+
+    grep ${DMHOSTNAME} /etc/hosts > /dev/null && sudo sed -i '' "/${DMHOSTNAME}/d" /etc/hosts
+    sudo echo "$(docker-machine ip ${C_DOCKER_MACHINE}) ${DMHOSTNAME}" | sudo tee -a /etc/hosts
+  }
+
+  if [ $(docker-machine status ${C_DOCKER_MACHINE}) == 'Running' ]; then
+    dmshell &> /dev/null
+  fi
+
+fi # end docker-machine
+
+# Xquartz stuff
+xquartz_if_not_running() {
+  v_nolisten_tcp=$(defaults read org.macosforge.xquartz.X11 nolisten_tcp)
+  v_xquartz_app=$(defaults read org.macosforge.xquartz.X11 app_to_run)
+
+  if [ $v_nolisten_tcp == "1" ]; then
+    defaults write org.macosforge.xquartz.X11 nolisten_tcp 0
+  fi
+
+  if [ $v_xquartz_app != "/usr/bin/true" ]; then
+    defaults write org.macosforge.xquartz.X11 app_to_run /usr/bin/true
+  fi
+
+  netstat -an | grep 6000 &> /dev/null || open -a XQuartz
+  while ! netstat -an \| grep 6000 &> /dev/null; do
+    sleep 2
+  done
+  export DISPLAY=:0.0
+}
+
+dcleanup(){
+	docker rm $(docker ps --filter status=exited -q 2>/dev/null) 2>/dev/null
+	docker rmi $(docker images --filter dangling=true -q 2>/dev/null) 2>/dev/null
+}
+
+
+del_stopped(){
+	local name=$1
+	local state=$(docker inspect --format "{{.State.Running}}" $name 2>/dev/null)
+
+	if [[ "$state" == "false" ]]; then
+		docker rm $name
+	fi
+}
+
+
+relies_on(){
+	local containers=$@
+
+	for container in $containers; do
+		local state=$(docker inspect --format "{{.State.Running}}" $container 2>/dev/null)
+
+		if [[ "$state" == "false" ]] || [[ "$state" == "" ]]; then
+			echo "$container is not running, starting it for you."
+			$container
+		fi
+	done
+}
+
+
+openvas(){
+         
+  docker run -d -p 443:443 -p 9390:9390 -p 9391:9391 mikesplain/openvas
+}
+
+metasploit(){
+  
+  docker run -t -i --rm linuxkonsult/kali-metasploit
+
+}
+
+
+torbrowser(){
+	del_stopped torbrowser
+    xquartz_if_not_running
+    docker_if_not_running
+    xhost +$(docker-machine ip ${C_DOCKER_MACHINE})
+
+    docker run -d \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-e DISPLAY=$(docker-machine inspect ${C_DOCKER_MACHINE} --format={{.Driver.HostOnlyCIDR}} | cut -d'/' -f1):0 \
+		--name torbrowser \
+		--net host \
+		--security-opt seccomp:unconfined \
+		jess/tor-browser
+
+	 #exit current shell
+	#exit 0
+}
+
+nes(){
+
+    del_stopped nes
+	xquartz_if_not_running
+    docker_if_not_running
+    xhost +$(docker-machine ip ${C_DOCKER_MACHINE})
+	local game=$1
+
+	docker run -d \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-e DISPLAY=$(docker-machine inspect ${C_DOCKER_MACHINE} --format={{.Driver.HostOnlyCIDR}} | cut -d'/' -f1):0 \
+		--name nes \
+		jess/nes /games/${game}.rom
+}	
+
+hollywood(){
+	docker run --rm -it \
+		--name hollywood \
+		jess/hollywood
+}
+
+registrator(){
+	del_stopped registrator
+
+	docker run -d --restart always \
+		-v /var/run/docker.sock:/tmp/docker.sock \
+		--net host \
+		--name registrator \
+		gliderlabs/registrator consul://$(docker-machine ip ${C_DOCKER_MACHINE}):8500
+}
+
+libreoffice(){
+	del_stopped libreoffice
+
+	docker run -d \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-e DISPLAY=$(docker-machine inspect ${C_DOCKER_MACHINE} --format={{.Driver.HostOnlyCIDR}} | cut -d'/' -f1):0 \
+		-v /Users/scottcoulton/Documents/slides:/root/slides \
+		-e GDK_SCALE \
+		-e GDK_DPI_SCALE \
+		--name libreoffice \
+		jess/libreoffice
+}
+
+consul(){
+	del_stopped consul
+
+	# check if we passed args and if consul is running
+	local args=$@
+	local state=$(docker inspect --format "{{.State.Running}}" consul 2>/dev/null)
+	if [[ "$state" == "true" ]] && [[ ! -z "$args" ]]; then
+		docker exec -it consul consul "$@"
+		return 0
+	fi
+
+	docker run -d \
+		--restart always \
+		-v $HOME/.consul:/etc/consul.d \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-p 8500:8500 \
+		-p 53:53/udp \
+		--name consul \
+		scottyc/consul \
+		-bootstrap-expect 1 \
+		-config-dir /etc/consul.d \
+		-data-dir /data \
+		-server \
+		-dc gotham \
+		-bind 0.0.0.0
+}
+
+rainbowstream(){
+	del_stopped rainbowstream
+    
+     docker run -it --rm \
+	    -v ~/.rainbow_oauth:/root/.rainbow_oauth \
+	    --name rainbowstream \
+	    jess/rainbowstream
+}	
+
+irssi(){
+   del_stopped irssi
+   docker run -it --rm \
+   --name=irssi \
+    -e TERM  \
+    --log-driver=none \
+    -v ~/.irssi:/home/user/.irssi \
+    --read-only \
+    irssi
+}
+norrisbot(){
+     del_stopped norrisbot
+
+     docker run -d \
+     -e BOT_API_KEY="<ADD Key here>" \
+     --name norrisbot \
+     scottyc/norrisbot
+	
+}
+
+dockerchrome() {
+      del_stopped dockerchrome
+      xquartz_if_not_running
+      docker_if_not_running
+      xhost +$(docker-machine ip ${C_DOCKER_MACHINE})
+      
+      docker run \
+        --rm \
+        --memory 512mb \
+        --net host \
+        --security-opt seccomp:unconfined \
+        -e DISPLAY=$(docker-machine inspect ${C_DOCKER_MACHINE} --format={{.Driver.HostOnlyCIDR}} | cut -d'/' -f1):0 \
+        -e GDK_SCALE \
+        -e GDK_DPI_SCALE \
+        jess/chrome
+    }
+
+dockerfirefox(){
+	del_stopped firefox
+    xquartz_if_not_running 
+	docker_if_not_running
+	xhost +$(docker-machine ip ${C_DOCKER_MACHINE})
+
+	docker run -d \
+		--memory 2gb \
+		--net host \
+		--cpuset-cpus 0 \
+		--privileged=true \
+		-v /tmp/.X11-unix:/tmp/.X11-unix \
+		-e DISPLAY=$(docker-machine inspect ${C_DOCKER_MACHINE} --format={{.Driver.HostOnlyCIDR}} | cut -d'/' -f1):0 \
+		-e GDK_SCALE \
+        -e GDK_DPI_SCALE \
+		--name firefox \
+		jess/firefox 
+
+	# exit current shell
+	#exit 0
+}  
