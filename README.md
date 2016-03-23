@@ -29,3 +29,5 @@ unset file
 ````
 
 Then add ````.dockerfunc```` to you $HOME
+
+I have taken out the TLS between docker-machine and the host machine. Its easy enough to add back in with your own certs.
